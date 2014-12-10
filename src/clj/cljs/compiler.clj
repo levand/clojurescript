@@ -858,10 +858,10 @@
                                   (concat args [nil]))))))
 
 (defn rename-to-js
-  "Change the file extension from .cljs to .js. Takes a File or a
+  "Change the file extension from .cljs or .cljc to .js. Takes a File or a
   String. Always returns a String."
   [file-str]
-  (clojure.string/replace file-str #"\.cljs$" ".js"))
+  (clojure.string/replace file-str #"\.clj[sc]$" ".js"))
 
 (defn mkdirs
   "Create all parent directories for the passed file."
@@ -990,7 +990,7 @@
   "Return a sequence of all .cljs files in the given directory."
   [dir]
   (filter #(let [name (.getName ^File %)]
-             (and (.endsWith name ".cljs")
+             (and (or (.endsWith name ".cljs") (.endsWith name ".cljc"))
                   (not= \. (first name))
                   (not (contains? cljs-reserved-file-names name))))
           (file-seq dir)))

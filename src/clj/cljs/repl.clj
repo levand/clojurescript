@@ -177,7 +177,7 @@
 
 (defn repl
   "Note - repl will reload core.cljs every time, even if supplied old repl-env"
-  [repl-env & {:keys [analyze-path verbose warn-on-undeclared special-fns static-fns] :as opts
+  [repl-env & {:keys [analyze-path verbose warn-on-undeclared special-fns static-fns features] :as opts
                :or {warn-on-undeclared true}}]
   (print "To quit, type: ")
   (prn :cljs/quit)
@@ -190,7 +190,8 @@
                                     :undeclared-var warn-on-undeclared
                                     :undeclared-ns warn-on-undeclared
                                     :undeclared-ns-form warn-on-undeclared)
-              ana/*cljs-static-fns* static-fns]
+              ana/*cljs-static-fns* static-fns
+              reader/*features* (into #{:cljs} features)]
       (when analyze-path
         (analyze-source analyze-path))
       (let [env {:context :expr :locals {}}
@@ -211,7 +212,8 @@
                                  reader/*alias-map*
                                  (apply merge
                                         ((juxt :requires :require-macros)
-                                         (ana/get-namespace ana/*cljs-ns*)))]
+                                         (ana/get-namespace ana/*cljs-ns*)))
+                                 reader/*features* (into #{:cljs} (:features opts))]
                          (reader/read rdr nil read-error))
                        (catch Exception e
                          (println (.getMessage e))

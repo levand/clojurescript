@@ -980,7 +980,12 @@
                        (= target '*unchecked-if*)
                        (do
                          (reset! *unchecked-if* val)
-                         ::set-unchecked-if)
+                         ::set-no-op)
+
+                       (= target '*features*)
+                       (do
+                         (set! reader/*features* val)
+                         ::set-no-op)
 
                        (symbol? target)
                        (do
@@ -1002,7 +1007,7 @@
        (when-not targetexpr 
          (throw (error env "set! target must be a field or a symbol naming a var")))
        (cond
-        (= targetexpr ::set-unchecked-if) {:env env :op :no-op}
+        (= targetexpr ::set-no-op) {:env env :op :no-op}
         :else {:env env :op :set! :form form :target targetexpr :val valexpr
                :children [targetexpr valexpr]})))))
 

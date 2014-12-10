@@ -41,7 +41,8 @@
             [cljs.js-deps :as deps]
             [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [clojure.tools.reader :as reader])
   (:import java.io.File
            java.io.BufferedInputStream
            java.net.URL
@@ -466,10 +467,15 @@
   "Returns a map containing :relative-path, :uri referring to the resource that
 should contain the source for the given namespace name."
   [ns]
-  (as-> (munge ns) %
-    (string/replace % \. \/)
-    (str % ".cljs")
-    {:relative-path % :uri (io/resource %)}))
+  (let [path (string/replace (munge ns) \. \/)
+        cljs-path (str path ".cljs")
+        cljc-path (str path ".cljc")
+        uri-cljs (io/resource cljs-path)]
+    (if uri-cljs
+      {:relative-path cljs-path :uri uri-cljs}
+      (if-let [uri-cljc (io/resource cljc-path)]
+        {:relative-path cljc-path :uri uri-cljc}
+        {:relative-path cljs-path :uri uri-cljs}))))
 
 (defn cljs-dependencies
   "Given a list of all required namespaces, return a list of
@@ -918,6 +924,12 @@ should contain the source for the given namespace name."
         (pr-str (absolute-parent output-to)))))
   true)
 
+(defn check-features [{:keys [features] :as opts}]
+  (when (contains? opts :features)
+    (assert (and (set? features) (every? keyword features))
+            (format ":features %s must be a set of keywords" (pr-str features))))
+  true)
+
 (defn check-source-map-path [{:keys [source-map-path] :as opts}]
   (when (contains? opts :source-map-path)
     (assert (string? source-map-path)
@@ -957,6 +969,7 @@ should contain the source for the given namespace name."
          (check-source-map opts)
          (check-source-map-path opts)
          (check-output-wrapper opts)
+         (check-features opts)
          (swap! compiler-env #(-> %
                                   (assoc-in [:opts :emit-constants] emit-constants)
                                   (assoc :target (:target opts))
@@ -974,7 +987,8 @@ should contain the source for the given namespace name."
                             {:unprovided enabled?
                              :undeclared-var enabled?
                              :undeclared-ns enabled?
-                             :undeclared-ns-form enabled?}))]
+                             :undeclared-ns-form enabled?}))
+                   reader/*features* (into #{:cljs} (:features opts))]
            (let [compiled (-compile source all-opts)
 
                  ; the constants_table.js file is not used directly here, is picked up by

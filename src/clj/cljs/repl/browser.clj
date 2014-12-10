@@ -89,6 +89,7 @@
             ".jpg" "image/jpeg"
             ".js" "text/javascript"
             ".cljs" "text/x-clojure"
+            ".cljc" "text/x-clojure"
             ".map" "application/json"
             ".png" "image/png"
             "text/plain"))
@@ -103,6 +104,7 @@
                     (fn [{:keys [path]} _ _] (or (= path "/")
                                                 (.endsWith path ".js")
                                                 (.endsWith path ".cljs")
+                                                (.endsWith path ".cljc")
                                                 (.endsWith path ".map")
                                                 (.endsWith path ".html")))
                     send-static)
