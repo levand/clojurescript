@@ -224,41 +224,56 @@
    For additional event types, see the examples in the code.
 "}
   cljs.test
-  (:require-macros
-   [clojure.template :as temp]))
-
-;; =============================================================================
-;; Protocols
-
-(defprotocol ITestReporter
-  (-do-report [_ env m]))
+  (:require-macros [clojure.template :as temp])
+  (:require [clojure.string :as string]))
 
 ;; =============================================================================
 ;; Default Reporting
+
+(defn empty-env
+  ([] (empty-env ::default))
+  ([reporter]
+   {:report-counters {:test 0 :pass 0 :fail 0 :error 0}
+    :testing-vars ()
+    :testing-contexts ()
+    :reporter reporter}))
+
+(def ^:dynamic *current-env* nil)
+
+(defn get-current-env []
+  (or *current-env* (empty-env)))
+
+(defn update-current-env! [ks f & args]
+  (set! *current-env* (apply update-in (get-current-env) ks f args)))
+
+(defn set-env! [new-env]
+  (set! *current-env* new-env))
+
+(defn clear-env! []
+  (set! *current-env* nil))
 
 (defn testing-vars-str
   "Returns a string representation of the current test.  Renders names
   in *testing-vars* as a list, then the source file and line of
   current assertion."
-  [env m]
+  [m]
   (let [{:keys [file line]} m]
     (str
-      (reverse (map #(:name (meta %)) (:testing-vars env)))
+      (reverse (map #(:name (meta %)) (:testing-vars (get-current-env))))
       " (" file ":" line ")")))
 
 (defn testing-contexts-str
   "Returns a string representation of the current test context. Joins
   strings in *testing-contexts* with spaces."
-  [env]
-  (apply str (interpose " " (reverse (:testing-contexts env)))))
+  []
+  (apply str (interpose " " (reverse (:testing-contexts (get-current-env))))))
 
-(defn inc-report-counter
+(defn inc-report-counter!
   "Increments the named counter in *report-counters*, a ref to a map.
   Does nothing if *report-counters* is nil."
-  [env name]
-  (if (:report-counters env)
-    (update-in env [:report-counters name] (fnil inc 0))
-    env))
+  [name]
+  (if (:report-counters (get-current-env))
+    (update-current-env! [:report-counters name] (fnil inc 0))))
 
 (defmulti
   ^{:doc "Generic reporting function, may be overridden to plug in
@@ -266,103 +281,116 @@
    'is' call 'report' to indicate results.  The argument given to
    'report' will be a map with a :type key."
      :dynamic true}
-  report (fn [_ m] (:type m)))
+  report (fn [m] [(:reporter (get-current-env)) (:type m)]))
 
-(defmethod report :default [env m]
-  (prn m))
+(defmethod report :default [m])
 
-(defmethod report :pass [env m]
-  (inc-report-counter env :pass))
+(defmethod report [::default :pass] [m]
+  (inc-report-counter! :pass))
 
-(defmethod report :fail [env m]
-  (println "\nFAIL in" (testing-vars-str env m))
-  (when (seq (:testing-contexts env))
-    (println (testing-contexts-str env)))
+(defmethod report [::default :fail] [m]
+  (inc-report-counter! :fail)
+  (println "\nFAIL in" (testing-vars-str m))
+  (when (seq (:testing-contexts (get-current-env)))
+    (println (testing-contexts-str)))
   (when-let [message (:message m)] (println message))
   (println "expected:" (pr-str (:expected m)))
-  (println "  actual:" (pr-str (:actual m)))
-  (inc-report-counter env :fail))
+  (println "  actual:" (pr-str (:actual m))))
 
-(defmethod report :error [env m]
-  (println "\nERROR in" (testing-vars-str env m))
-  (when (seq (:testing-contexts env))
-    (println (testing-contexts-str env)))
+(defmethod report [::default :error] [m]
+  (inc-report-counter! :error)
+  (println "\nERROR in" (testing-vars-str m))
+  (when (seq (:testing-contexts (get-current-env)))
+    (println (testing-contexts-str)))
   (when-let [message (:message m)] (println message))
   (println "expected:" (pr-str (:expected m)))
-  (print "  actual: ") (prn (:actual m))
-  (inc-report-counter env :error))
+  (print "  actual: ") (prn (:actual m)))
 
-(defmethod report :summary [env m]
+(defmethod report [::default :summary] [m]
   (println "\nRan" (:test m) "tests containing"
     (+ (:pass m) (:fail m) (:error m)) "assertions.")
-  (println (:fail m) "failures," (:error m) "errors.")
-  env)
+  (println (:fail m) "failures," (:error m) "errors."))
 
-(defmethod report :begin-test-ns [env m]
-  (println "\nTesting" (name (:ns m)))
-  env)
+(defmethod report [::default :begin-test-ns] [m]
+  (println "\nTesting" (name (:ns m))))
 
 ;; Ignore these message types:
-(defmethod report :end-test-ns [env m] env)
-(defmethod report :begin-test-var [env m] env)
-(defmethod report :end-test-var [env m] env)
+(defmethod report [::default :end-test-ns] [m])
+(defmethod report [::default :begin-test-var] [m])
+(defmethod report [::default :end-test-var] [m])
 
-(deftype DefaultReporter []
-  ITestReporter
-  (-do-report [_ env m]
-    (report env m)))
+(defn js-line-and-column [stack-element]
+  (let [parts (.split stack-element ":")
+        cnt   (count parts)]
+    [(js/parseInt (nth parts (- cnt 2)))
+     (js/parseInt (nth parts (dec cnt)))]))
 
-(defn default-reporter []
-  (DefaultReporter.))
+(defn js-filename [stack-element]
+  (first (.split (last (.split stack-element "/out/")) ":")))
 
-(defn file-and-line
-  [exception depth]
-  (if-let [stack (.-stack exception)]
-    ;; TODO: flesh out
-    {:file nil :line nil}
-    {:file (.-fileName exception)
-     :line (.-lineNumber exception)}))
+(defn mapped-line-and-column [filename line column]
+  (let [default [filename line column]]
+    (if-let [source-map (:source-map (get-current-env))]
+      ;; source maps are 0 indexed for lines
+      (if-let [columns (get-in source-map [filename (dec line)])]
+        (vec
+          (map
+            ;; source maps are 0 indexed for columns
+            ;; multiple segments may exist at column
+            ;; just take first
+            (first
+              (if-let [mapping (get columns (dec column))]
+                mapping
+                (second (first columns))))
+            [:source :line :col]))
+        default)
+      default)))
 
-(defn do-report [env m]
-  {:post [(map? %)]}
+(defn file-and-line [exception depth]
+  (let [stack (.-stack exception)]
+      (if (and stack (string? stack))
+        ;; TODO: flesh out
+        (let [stacktrace
+              (vec (map string/trim
+                     (string/split stack #"\n")))
+              stack-element (nth stacktrace depth)
+              fname (js-filename stack-element)
+              [line column] (js-line-and-column stack-element)
+              [fname line column] (mapped-line-and-column fname line column)]
+          {:file fname :line line :column column})
+        {:file (.-fileName exception)
+         :line (.-lineNumber exception)}))  )
+
+(defn do-report [m]
   (let [m (case (:type m)
-            :fail (merge (file-and-line (js/Error.) 1) m)
+            :fail (merge (file-and-line (js/Error.) 4) m)
             :error (merge (file-and-line (:actual m) 0) m)
             m)]
-   (-do-report (:reporter env) env m)))
-
-(defn empty-env
-  ([] (empty-env (default-reporter)))
-  ([reporter]
-   {:report-counters {:test 0 :pass 0 :fail 0 :error 0}
-    :testing-vars ()
-    :testing-contexts ()
-    :reporter reporter}))
+    (report m)))
 
 ;; =============================================================================
 ;; Low-level functions
 
 (defn test-var
   "If v has a function in its :test metadata, calls that function,
-   add v to :testing-vars property of env."
-  ([v]
-   (test-var (empty-env) v))
-  ([env v]
-   {:pre [(map? env) (instance? Var v)]}
-   (let [t (:test (meta v))
-         env (-> env
-               (update-in [:testing-vars] conj v)
-               (update-in [:report-counters :test] inc))]
-     (try
-       (let [env' (t env)]
-         (when (:return env') env'))
-       (catch :default e
-         (let [env' (do-report env
-                      {:type :error
-                       :message "Uncaught exception, not in assertion."
-                       :expected nil
-                       :actual e})]
-           (when (:return env') env')))))))
+  add v to :testing-vars property of env."
+  [v]
+  {:pre [(instance? Var v)]}
+  (if-let [t (:test (meta v))]
+    (do
+      (update-current-env! [:testing-vars] conj v)
+      (update-current-env! [:report-counters :test] inc)
+      (do-report {:type :begin-test-var :var v})
+      (try
+        (t)
+        (catch :default e
+          (do-report
+            {:type :error
+             :message "Uncaught exception, not in assertion."
+             :expected nil
+             :actual e})))
+      (do-report {:type :end-test-var :var v})
+      (update-current-env! [:testing-vars] rest))))
 
 (defn- default-fixture
   "The default, empty, fixture function.  Just calls its argument."
@@ -384,23 +412,16 @@
 (defn test-vars
   "Groups vars by their namespace and runs test-vars on them with
   appropriate fixtures applied."
-  ([vars] (test-vars (empty-env) vars))
-  ([env vars]
-   (let [return (:return env)
-         env' (reduce
-                (fn [env [ns vars]]
-                  (let [once-fixture-fn (join-fixtures (:once-fixtures env))
-                        each-fixture-fn (join-fixtures (:each-fixtures env))]
-                    (once-fixture-fn
-                      (fn []
-                        (reduce
-                          (fn [env v]
-                            (if (:test (meta v))
-                              (each-fixture-fn (fn [] (test-var env v)))
-                              env))
-                          env vars)))))
-                (assoc env :return true) (group-by (comp :ns meta) vars))]
-     (when return env'))))
+  [vars]
+  (doseq [[ns vars] (group-by (comp :ns meta) vars)]
+    (let [env (get-current-env)
+          once-fixture-fn (join-fixtures (get-in env [:once-fixtures ns]))
+          each-fixture-fn (join-fixtures (get-in env [:each-fixtures ns]))]
+      (once-fixture-fn
+        (fn []
+          (doseq [v vars]
+            (when (:test (meta v))
+              (each-fixture-fn (fn [] (test-var v))))))))))
 
 ;; =============================================================================
 ;; Running Tests, high level functions

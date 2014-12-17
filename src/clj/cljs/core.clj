@@ -34,7 +34,7 @@
 
                             cond-> cond->> as-> some-> some->>
 
-                            if-some when-some test ns-interns var])
+                            if-some when-some test ns-interns var vswap!])
   (:require clojure.walk
             clojure.set
             cljs.compiler
@@ -879,10 +879,11 @@
 (defn- build-positional-factory
   [rsym rname fields]
   (let [fn-name (with-meta (symbol (core/str '-> rsym))
-                  (assoc (meta rsym) :factory :positional))]
+                  (assoc (meta rsym) :factory :positional))
+        field-values (if (-> rsym meta :internal-ctor) (conj fields nil nil nil) fields)]
     `(defn ~fn-name
        [~@fields]
-       (new ~rname ~@fields))))
+       (new ~rname ~@field-values))))
 
 (defmacro deftype [t fields & impls]
   (let [env &env
@@ -988,7 +989,7 @@
         ks (map keyword fields)
         getters (map (fn [k] `(~k ~ms)) ks)]
     `(defn ~fn-name [~ms]
-       (new ~rname ~@getters nil (dissoc ~ms ~@ks)))))
+       (new ~rname ~@getters nil (dissoc ~ms ~@ks) nil))))
 
 (defmacro defrecord [rsym fields & impls]
   (let [rsym (vary-meta rsym assoc :internal-ctor true)
@@ -1681,3 +1682,9 @@
           (fn [[sym _]] `[(symbol ~(name sym)) (var ~sym)])
           (get-in @env/*compiler* [:cljs.analyzer/namespaces ns :defs]))]))
 
+(defmacro vswap!
+  "Non-atomically swaps the value of the volatile as if:
+   (apply f current-value-of-vol args). Returns the value that
+   was swapped in."
+  [vol f & args]
+  `(-vreset! ~vol (~f (-deref ~vol) ~@args)))

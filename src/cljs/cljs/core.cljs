@@ -402,6 +402,9 @@
 (defprotocol ISwap
   (-swap! [o f] [o f a] [o f a b] [o f a b xs]))
 
+(defprotocol IVolatile
+  (-vreset! [o new-value]))
+
 (defprotocol IIterable
   (-iterator [coll]))
 
@@ -563,15 +566,15 @@
 
 (defn- compare-symbols [a b]
   (cond
-   (= a b) 0
+   (identical? (.-str a) (.-str b)) 0
    (and (not (.-ns a)) (.-ns b)) -1
    (.-ns a) (if-not (.-ns b)
               1
-              (let [nsc (compare (.-ns a) (.-ns b))]
-                (if (zero? nsc)
-                  (compare (.-name a) (.-name b))
+              (let [nsc (garray/defaultCompare (.-ns a) (.-ns b))]
+                (if (== 0 nsc)
+                  (garray/defaultCompare (.-name a) (.-name b))
                   nsc)))
-   :default (compare (.-name a) (.-name b))))
+   :default (garray/defaultCompare (.-name a) (.-name b))))
 
 (deftype Symbol [ns name str ^:mutable _hash _meta]
   Object
@@ -2416,6 +2419,18 @@ reduces them without incurring seq initialization"
 (defn hash-keyword [k]
   (int (+ (hash-symbol k) 0x9e3779b9)))
 
+(defn- compare-keywords [a b]
+  (cond
+   (identical? (.-fqn a) (.-fqn b)) 0
+   (and (not (.-ns a)) (.-ns b)) -1
+   (.-ns a) (if-not (.-ns b)
+              1
+              (let [nsc (garray/defaultCompare (.-ns a) (.-ns b))]
+                (if (== 0 nsc)
+                  (garray/defaultCompare (.-name a) (.-name b))
+                  nsc)))
+   :default (garray/defaultCompare (.-name a) (.-name b))))
+
 (deftype Keyword [ns name fqn ^:mutable _hash]
   Object
   (toString [_] (str ":" fqn))
@@ -3304,11 +3319,26 @@ reduces them without incurring seq initialization"
   called, the returned function calls f with args + additional args."
   ([f] f)
   ([f arg1]
-   (fn [& args] (apply f arg1 args)))
+   (fn
+     ([] (f arg1))
+     ([x] (f arg1 x))
+     ([x y] (f arg1 x y))
+     ([x y z] (f arg1 x y z))
+     ([x y z & args] (apply f arg1 x y z args))))
   ([f arg1 arg2]
-   (fn [& args] (apply f arg1 arg2 args)))
+   (fn
+     ([] (f arg1 arg2))
+     ([x] (f arg1 arg2 x))
+     ([x y] (f arg1 arg2 x y))
+     ([x y z] (f arg1 arg2 x y z))
+     ([x y z & args] (apply f arg1 arg2 x y z args))))
   ([f arg1 arg2 arg3]
-   (fn [& args] (apply f arg1 arg2 arg3 args)))
+   (fn
+     ([] (f arg1 arg2 arg3))
+     ([x] (f arg1 arg2 arg3 x))
+     ([x y] (f arg1 arg2 arg3 x y))
+     ([x y z] (f arg1 arg2 arg3 x y z))
+     ([x y z & args] (apply f arg1 arg2 arg3 x y z args))))
   ([f arg1 arg2 arg3 & more]
    (fn [& args] (apply f arg1 arg2 arg3 (concat more args)))))
 
@@ -3497,6 +3527,28 @@ reduces them without incurring seq initialization"
   [iref]
   (.-validator iref))
 
+(deftype Volatile [^:mutable state]
+  IVolatile
+  (-vreset! [_ new-state]
+    (set! state new-state))
+
+  IDeref
+  (-deref [_] state))
+
+(defn volatile!
+  "Creates and returns a Volatile with an initial value of val."
+  [val]
+  (Volatile. val))
+
+(defn volatile?
+  "Returns true if x is a volatile."
+  [x] (instance? Volatile x))
+
+(defn vreset!
+  "Sets the value of volatile to newval without regard for the
+   current value. Returns newval."
+  [vol newval]  (-vreset! vol newval))
+
 (defn keep-indexed
   "Returns a lazy sequence of the non-nil results of (f index item). Note,
   this means false return values will be included.  f must be free of
@@ -3504,12 +3556,12 @@ reduces them without incurring seq initialization"
   provided."
   ([f]
    (fn [rf]
-     (let [ia (atom -1)]
+     (let [ia (volatile! -1)]
        (fn
          ([] (rf))
          ([result] (rf result))
          ([result input]
-            (let [i (swap! ia inc)
+            (let [i (vswap! ia inc)
                   v (f i input)]
               (if (nil? v)
                 result
@@ -3664,13 +3716,13 @@ reduces them without incurring seq initialization"
   no collection is provided."
   ([n]
      (fn [rf]
-       (let [na (atom n)]
+       (let [na (volatile! n)]
          (fn
            ([] (rf))
            ([result] (rf result))
            ([result input]
               (let [n @na
-                    nn (swap! na dec)
+                    nn (vswap! na dec)
                     result (if (pos? n)
                              (rf result input)
                              result)]
@@ -3688,13 +3740,13 @@ reduces them without incurring seq initialization"
   Returns a stateful transducer when no collection is provided."
   ([n]
      (fn [rf]
-       (let [na (atom n)]
+       (let [na (volatile! n)]
          (fn
            ([] (rf))
            ([result] (rf result))
            ([result input]
               (let [n @na]
-                (swap! na dec)
+                (vswap! na dec)
                 (if (pos? n)
                   result
                   (rf result input))))))))
@@ -3726,7 +3778,7 @@ reduces them without incurring seq initialization"
   stateful transducer when no collection is provided."
   ([pred]
      (fn [rf]
-       (let [da (atom true)]
+       (let [da (volatile! true)]
          (fn
            ([] (rf))
            ([result] (rf result))
@@ -3735,7 +3787,7 @@ reduces them without incurring seq initialization"
                 (if (and drop? (pred input))
                   result
                   (do
-                    (reset! da nil)
+                    (vreset! da nil)
                     (rf result input)))))))))
   ([pred coll]
      (let [step (fn [pred coll]
@@ -7751,12 +7803,12 @@ reduces them without incurring seq initialization"
   transducer when no collection is provided."
   ([n]
      (fn [rf]
-       (let [ia (atom -1)]
+       (let [ia (volatile! -1)]
          (fn
            ([] (rf))
            ([result] (rf result))
            ([result input]
-              (let [i (swap! ia inc)]
+              (let [i (vswap! ia inc)]
                 (if (zero? (rem i n))
                   (rf result input)
                   result)))))))
@@ -7777,7 +7829,7 @@ reduces them without incurring seq initialization"
   ([f]
      (fn [rf]
        (let [a (array-list)
-             pa (atom ::none)]
+             pa (volatile! ::none)]
          (fn
            ([] (rf))
            ([result]
@@ -7791,7 +7843,7 @@ reduces them without incurring seq initialization"
            ([result input]
               (let [pval @pa
                     val (f input)]
-                (reset! pa val)
+                (vreset! pa val)
                 (if (or (keyword-identical? pval ::none)
                         (= val pval))
                   (do
@@ -8265,6 +8317,12 @@ reduces them without incurring seq initialization"
     (pr-writer (.-state a) writer opts)
     (-write writer ">"))
 
+  Volatile
+  (-pr-writer [a writer opts]
+    (-write writer "#<Volatile: ")
+    (pr-writer (.-state a) writer opts)
+    (-write writer ">"))
+
   Var
   (-pr-writer [a writer opts]
     (-write writer "#'")
@@ -8276,8 +8334,7 @@ reduces them without incurring seq initialization"
   (-compare [x y] (compare-symbols x y))
 
   Keyword
-  ; keyword happens to have the same fields as Symbol, so this just works
-  (-compare [x y] (compare-symbols x y))
+  (-compare [x y] (compare-keywords x y))
 
   Subvec
   (-compare [x y] (compare-indexed x y))
@@ -8405,13 +8462,13 @@ reduces them without incurring seq initialization"
   Returns a transducer when no collection is provided."
   ([]
    (fn [rf]
-     (let [pa (atom ::none)]
+     (let [pa (volatile! ::none)]
        (fn
          ([] (rf))
          ([result] (rf result))
          ([result input]
             (let [prior @pa]
-              (reset! pa input)
+              (vreset! pa input)
               (if (= prior input)
                 result
                 (rf result input))))))))
