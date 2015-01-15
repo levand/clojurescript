@@ -1,4 +1,4 @@
-(defproject org.clojure/clojurescript "0.0-SNAPSHOT"
+(defproject org.clojure/clojurescript "0.0-fx-SNAPSHOT"
   :description "ClojureScript compiler and core runtime library"
   :parent [org.clojure/pom.contrib "0.1.2"]
   :url "https://github.com/clojure/clojurescript"
@@ -8,9 +8,9 @@
   :source-paths ["src/clj"]
   :resource-paths ["src/cljs"]
   :test-paths ["test/clj"]
-  :dependencies [[org.clojure/clojure "1.6.0"]
+  :dependencies [[org.clojure/clojure "1.7.0-fx-SNAPSHOT"]
                  [org.clojure/data.json "0.2.3"]
-                 [org.clojure/tools.reader "0.8.10"]
+                 [org.clojure/tools.reader "0.8.14-fx-SNAPSHOT"]
                  [org.clojure/google-closure-library "0.0-20140718-946a7d39"]
                  [com.google.javascript/closure-compiler "v20140625"]
                  [org.mozilla/rhino "1.7R4"]]

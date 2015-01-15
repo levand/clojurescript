@@ -7,7 +7,7 @@ CLOSURE_RELEASE="20140625"
 DJSON_RELEASE="0.2.3"
 GCLOSURE_LIB_RELEASE="0.0-20140718-946a7d39"
 RHINO_RELEASE="1_7R3"
-TREADER_RELEASE="0.8.10"
+TREADER_RELEASE="0.8.14-fx"
 
 # check dependencies
 curl -V >/dev/null  || { echo "cURL is missing, or not on your system path."; exit 1; }

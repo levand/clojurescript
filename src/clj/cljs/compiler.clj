@@ -890,10 +890,10 @@
                                   (concat args [nil]))))))
 
 (defn rename-to-js
-  "Change the file extension from .cljs to .js. Takes a File or a
+  "Change the file extension from .cljs or .cljc to .js. Takes a File or a
   String. Always returns a String."
   [file-str]
-  (clojure.string/replace file-str #"\.cljs$" ".js"))
+  (clojure.string/replace file-str #"\.clj[sc]$" ".js"))
 
 (defn with-core-cljs
   "Ensure that core.cljs has been loaded."
@@ -1043,13 +1043,13 @@
   "Return a sequence of all .cljs files in the given directory."
   [dir]
   (filter #(let [name (.getName ^File %)]
-             (and (.endsWith name ".cljs")
+             (and (or (.endsWith name ".cljs") (.endsWith name ".cljc"))
                   (not= \. (first name))
                   (not (contains? cljs-reserved-file-names name))))
           (file-seq dir)))
 
 (defn compile-root
-  "Looks recursively in src-dir for .cljs files and compiles them to
+  "Looks recursively in src-dir for .cljs or .cljc files and compiles them to
    .js files. If target-dir is provided, output will go into this
    directory mirroring the source directory structure. Returns a list
    of maps containing information about each file which was compiled

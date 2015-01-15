@@ -42,7 +42,8 @@
             [cljs.js-deps :as deps]
             [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [clojure.tools.reader :as reader])
   (:import java.io.File
            java.io.BufferedInputStream
            java.net.URL
@@ -471,10 +472,15 @@
   "Returns a map containing :relative-path, :uri referring to the resource that
 should contain the source for the given namespace name."
   [ns]
-  (as-> (munge ns) %
-    (string/replace % \. \/)
-    (str % ".cljs")
-    {:relative-path % :uri (io/resource %)}))
+  (let [path (string/replace (munge ns) \. \/)
+        cljs-path (str path ".cljs")
+        cljc-path (str path ".cljc")
+        uri-cljs (io/resource cljs-path)]
+    (if uri-cljs
+      {:relative-path cljs-path :uri uri-cljs}
+      (if-let [uri-cljc (io/resource cljc-path)]
+        {:relative-path cljc-path :uri uri-cljc}
+        {:relative-path cljs-path :uri uri-cljs}))))
 
 (defn source-for-namespace
   [ns compiler-env]
@@ -483,11 +489,14 @@ should contain the source for the given namespace name."
         relpath (str path ".cljs")]
     (if-let [cljs-res (io/resource relpath)]
       {:relative-path relpath :uri cljs-res}
-      (let [relpath (:file (get-in @compiler-env [:js-dependency-index ns-str]))]
-        (if-let [js-res (io/resource relpath)]
-          {:relative-path relpath :uri js-res}
-         (throw
-           (IllegalArgumentException. (str "Namespace " ns " does not exist"))))))))
+      (let [relpathc (str path ".cljc")]
+        (if-let [cljc-res (io/resource relpathc)]
+          {:relative-path relpathc :uri cljc-res}
+          (let [relpath (:file (get-in @compiler-env [:js-dependency-index ns-str]))]
+            (if-let [js-res (io/resource relpath)]
+              {:relative-path relpath :uri js-res}
+                (throw
+                  (IllegalArgumentException. (str "Namespace " ns " does not exist"))))))))))
 
 (defn cljs-dependencies
   "Given a list of all required namespaces, return a list of
@@ -959,6 +968,12 @@ should contain the source for the given namespace name."
         ":source-map-path cannot be specified without also specifying :output-to and :source-map if optimization setting applied")))
   true)
 
+(defn check-features [{:keys [features] :as opts}]
+  (when (contains? opts :features)
+    (assert (and (set? features) (every? keyword features))
+      (format ":features %s must be a set of keywords" (pr-str features))))
+  true)
+
 (defn check-output-wrapper [{:keys [output-wrapper optimizations]}]
   (assert (not (and output-wrapper (= :whitespace optimizations)))
           ":output-wrapper cannot be combined with :optimizations :whitespace"))
@@ -987,6 +1002,7 @@ should contain the source for the given namespace name."
          (check-output-dir opts)
          (check-source-map opts)
          (check-source-map-path opts)
+         (check-features opts)
          (check-output-wrapper opts)
          (swap! compiler-env
            #(-> %
@@ -1012,7 +1028,8 @@ should contain the source for the given namespace name."
                            (repeat warnings))
                          warnings)))
                    comp/*build-options* opts
-                   ana/*verbose* (:verbose opts)]
+                   ana/*verbose* (:verbose opts)
+                   reader/*features* (into #{:cljs} (:features opts))]
            (let [compiled (util/measure compiler-stats
                             "Compile basic sources"
                             (doall (-compile source all-opts)))
@@ -1082,6 +1099,7 @@ should contain the source for the given namespace name."
     (let [goog-ns
           (case (util/ext src)
             "cljs" (comp/munge (:ns (ana/parse-ns src)))
+            "cljc" (comp/munge (:ns (ana/parse-ns src)))
             "js"   (cond-> (:provides (parse-js-ns src))
                      (not all-provides) first)
             (throw

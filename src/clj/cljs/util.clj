@@ -48,7 +48,14 @@
   (clojure.lang.Compiler/munge (str ss)))
 
 (defn ns->relpath [s]
-  (str (string/replace (munge-path s) \. \/) ".cljs"))
+  (let [path (string/replace (munge-path s) \. \/)
+        cljs-path (str path ".cljs")
+        cljc-path (str path ".cljc")]
+    (if (io/resource cljs-path)
+      cljs-path
+      (if (io/resource cljc-path)
+        cljc-path
+        cljs-path))))
 
 (defn path-seq
   [file-str]

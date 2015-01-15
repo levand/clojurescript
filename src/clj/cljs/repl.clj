@@ -337,7 +337,7 @@
       (ana/analyze-file (str "file://" (.getAbsolutePath file))))))
 
 (defn repl*
-  [repl-env {:keys [analyze-path repl-verbose warn-on-undeclared special-fns static-fns] :as opts
+  [repl-env {:keys [analyze-path repl-verbose warn-on-undeclared special-fns static-fns features] :as opts
              :or {warn-on-undeclared true}}]
   (print "To quit, type: ")
   (prn :cljs/quit)
@@ -350,7 +350,8 @@
                                     :undeclared-var warn-on-undeclared
                                     :undeclared-ns warn-on-undeclared
                                     :undeclared-ns-form warn-on-undeclared)
-              ana/*cljs-static-fns* static-fns]
+              ana/*cljs-static-fns* static-fns
+              reader/*features* (into #{:cljs} features)]
       ;; TODO: the follow should become dead code when the REPL is
       ;; sufficiently enhanced to understand :cache-analysis - David
       (when analyze-path

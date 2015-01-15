@@ -1,0 +1,259 @@
+From feb9ca32f0a4c6baf9b33a2e1c1b11210d78b087 Mon Sep 17 00:00:00 2001
+From: puredanger <alex.miller@cognitect.com>
+Date: Fri, 7 Nov 2014 10:02:22 -0600
+Subject: [PATCH] Feature expressions
+
+---
+ pom.template.xml              |  2 +-
+ project.clj                   |  2 +-
+ script/bootstrap              |  2 +-
+ src/clj/cljs/analyzer.clj     |  9 +++++++--
+ src/clj/cljs/closure.clj      | 26 ++++++++++++++++++++------
+ src/clj/cljs/compiler.clj     |  6 +++---
+ src/clj/cljs/repl.clj         |  8 +++++---
+ src/clj/cljs/repl/browser.clj |  2 ++
+ src/clj/cljs/util.clj         | 11 +++++++++--
+ 9 files changed, 49 insertions(+), 19 deletions(-)
+
+diff --git a/pom.template.xml b/pom.template.xml
+index 2ec14e8..fcc1200 100644
+--- a/pom.template.xml
++++ b/pom.template.xml
+@@ -50,7 +50,7 @@
+     <dependency>
+       <groupId>org.clojure</groupId>
+       <artifactId>tools.reader</artifactId>
+-      <version>0.8.10</version>
++      <version>0.8.13-fx</version>
+     </dependency>
+   </dependencies>
+ 
+diff --git a/project.clj b/project.clj
+index d126eb8..4bb56ca 100644
+--- a/project.clj
++++ b/project.clj
+@@ -10,7 +10,7 @@ (defproject org.clojure/clojurescript "0.0-SNAPSHOT"
+   :test-paths ["test/clj"]
+   :dependencies [[org.clojure/clojure "1.6.0"]
+                  [org.clojure/data.json "0.2.3"]
+-                 [org.clojure/tools.reader "0.8.10"]
++                 [org.clojure/tools.reader "0.8.13-fx"]
+                  [org.clojure/google-closure-library "0.0-20140718-946a7d39"]
+                  [com.google.javascript/closure-compiler "v20140625"]
+                  [org.mozilla/rhino "1.7R4"]]
+diff --git a/script/bootstrap b/script/bootstrap
+index 6798da4..b86bf8f 100755
+--- a/script/bootstrap
++++ b/script/bootstrap
+@@ -6,7 +6,7 @@ CLOJURE_RELEASE="1.6.0"
+ DJSON_RELEASE="0.2.3"
+ GCLOSURE_LIB_RELEASE="0.0-20140718-946a7d39"
+ RHINO_RELEASE="1_7R3"
+-TREADER_RELEASE="0.8.10"
++TREADER_RELEASE="0.8.13-fx"
+ 
+ mkdir -p lib
+ 
+diff --git a/src/clj/cljs/analyzer.clj b/src/clj/cljs/analyzer.clj
+index 097ef60..d4ff7dd 100644
+--- a/src/clj/cljs/analyzer.clj
++++ b/src/clj/cljs/analyzer.clj
+@@ -955,7 +955,12 @@ (defmethod parse 'set!
+                        (= target '*unchecked-if*)
+                        (do
+                          (reset! *unchecked-if* val)
+-                         ::set-unchecked-if)
++                         ::set-no-op)
++
++                       (= target '*features*)
++                       (do
++                         (set! reader/*features* val)
++                         ::set-no-op)
+ 
+                        (symbol? target)
+                        (do
+@@ -977,7 +982,7 @@ (defmethod parse 'set!
+        (when-not targetexpr 
+          (throw (error env "set! target must be a field or a symbol naming a var")))
+        (cond
+-        (= targetexpr ::set-unchecked-if) {:env env :op :no-op}
++        (= targetexpr ::set-no-op) {:env env :op :no-op}
+         :else {:env env :op :set! :form form :target targetexpr :val valexpr
+                :children [targetexpr valexpr]})))))
+ 
+diff --git a/src/clj/cljs/closure.clj b/src/clj/cljs/closure.clj
+index 1e8ba30..f0316b0 100644
+--- a/src/clj/cljs/closure.clj
++++ b/src/clj/cljs/closure.clj
+@@ -41,7 +41,8 @@ (ns cljs.closure
+             [cljs.js-deps :as deps]
+             [clojure.java.io :as io]
+             [clojure.string :as string]
+-            [clojure.data.json :as json])
++            [clojure.data.json :as json]
++            [clojure.tools.reader :as reader])
+   (:import java.io.File
+            java.io.BufferedInputStream
+            java.net.URL
+@@ -456,10 +457,15 @@ (defn cljs-source-for-namespace
+   "Returns a map containing :relative-path, :uri referring to the resource that
+ should contain the source for the given namespace name."
+   [ns]
+-  (as-> (munge ns) %
+-    (string/replace % \. \/)
+-    (str % ".cljs")
+-    {:relative-path % :uri (io/resource %)}))
++  (let [path (string/replace (munge ns) \. \/)
++        cljs-path (str path ".cljs")
++        cljc-path (str path ".cljc")
++        uri-cljs (io/resource cljs-path)]
++    (if uri-cljs
++      {:relative-path cljs-path :uri uri-cljs}
++      (if-let [uri-cljc (io/resource cljc-path)]
++        {:relative-path cljc-path :uri uri-cljc}
++        {:relative-path cljs-path :uri uri-cljs}))))
+ 
+ (defn cljs-dependencies
+   "Given a list of all required namespaces, return a list of
+@@ -908,6 +914,12 @@ (defn check-source-map [{:keys [output-to source-map output-dir] :as opts}]
+         (pr-str (absolute-parent output-to)))))
+   true)
+ 
++(defn check-features [{:keys [features] :as opts}]
++  (when (contains? opts :features)
++    (assert (and (set? features) (every? keyword features))
++            (format ":features %s must be a set of keywords" (pr-str features))))
++  true)
++
+ (defn check-source-map-path [{:keys [source-map-path] :as opts}]
+   (when (contains? opts :source-map-path)
+     (assert (string? source-map-path)
+@@ -942,6 +954,7 @@ (defn build
+          (check-output-dir opts)
+          (check-source-map opts)
+          (check-source-map-path opts)
++         (check-features opts)
+          (swap! compiler-env #(-> %
+                                   (assoc-in [:opts :emit-constants] emit-constants)
+                                   (assoc :target (:target opts))
+@@ -958,7 +971,8 @@ (defn build
+                             {:unprovided enabled?
+                              :undeclared-var enabled?
+                              :undeclared-ns enabled?
+-                             :undeclared-ns-form enabled?}))]
++                             :undeclared-ns-form enabled?}))
++                   reader/*features* (into #{:cljs} (:features opts))]
+            (let [compiled (-compile source all-opts)
+ 
+                  ; the constants_table.js file is not used directly here, is picked up by
+diff --git a/src/clj/cljs/compiler.clj b/src/clj/cljs/compiler.clj
+index 2f83f38..4b16011 100644
+--- a/src/clj/cljs/compiler.clj
++++ b/src/clj/cljs/compiler.clj
+@@ -850,10 +850,10 @@ (defmethod emit* :js
+                                   (concat args [nil]))))))
+ 
+ (defn rename-to-js
+-  "Change the file extension from .cljs to .js. Takes a File or a
++  "Change the file extension from .cljs or .cljc to .js. Takes a File or a
+   String. Always returns a String."
+   [file-str]
+-  (clojure.string/replace file-str #"\.cljs$" ".js"))
++  (clojure.string/replace file-str #"\.clj[sc]$" ".js"))
+ 
+ (defn mkdirs
+   "Create all parent directories for the passed file."
+@@ -982,7 +982,7 @@ (defn cljs-files-in
+   "Return a sequence of all .cljs files in the given directory."
+   [dir]
+   (filter #(let [name (.getName ^File %)]
+-             (and (.endsWith name ".cljs")
++             (and (or (.endsWith name ".cljs") (.endsWith name ".cljc"))
+                   (not= \. (first name))
+                   (not (contains? cljs-reserved-file-names name))))
+           (file-seq dir)))
+diff --git a/src/clj/cljs/repl.clj b/src/clj/cljs/repl.clj
+index 5829060..1618dde 100644
+--- a/src/clj/cljs/repl.clj
++++ b/src/clj/cljs/repl.clj
+@@ -181,7 +181,7 @@ (defn analyze-source
+ 
+ (defn repl
+   "Note - repl will reload core.cljs every time, even if supplied old repl-env"
+-  [repl-env & {:keys [analyze-path verbose warn-on-undeclared special-fns static-fns] :as opts
++  [repl-env & {:keys [analyze-path verbose warn-on-undeclared special-fns static-fns features] :as opts
+                :or {warn-on-undeclared true}}]
+   (print "To quit, type: ")
+   (prn :cljs/quit)
+@@ -194,7 +194,8 @@ (defn repl
+                                     :undeclared-var warn-on-undeclared
+                                     :undeclared-ns warn-on-undeclared
+                                     :undeclared-ns-form warn-on-undeclared)
+-              ana/*cljs-static-fns* static-fns]
++              ana/*cljs-static-fns* static-fns
++              reader/*features* (into #{:cljs} features)]
+       (when analyze-path
+         (analyze-source analyze-path))
+       (let [env {:context :expr :locals {}}
+@@ -215,7 +216,8 @@ (defn repl
+                                  reader/*alias-map*
+                                  (apply merge
+                                         ((juxt :requires :require-macros)
+-                                         (ana/get-namespace ana/*cljs-ns*)))]
++                                         (ana/get-namespace ana/*cljs-ns*)))
++                                 reader/*features* (into #{:cljs} (:features opts))]
+                          (reader/read rdr nil read-error))
+                        (catch Exception e
+                          (println (.getMessage e))
+diff --git a/src/clj/cljs/repl/browser.clj b/src/clj/cljs/repl/browser.clj
+index d3e706d..77477c7 100644
+--- a/src/clj/cljs/repl/browser.clj
++++ b/src/clj/cljs/repl/browser.clj
+@@ -88,6 +88,7 @@ (defn send-static [{path :path :as request} conn opts]
+             ".jpg" "image/jpeg"
+             ".js" "text/javascript"
+             ".cljs" "text/x-clojure"
++            ".cljc" "text/x-clojure"
+             ".map" "application/json"
+             ".png" "image/png"
+             "text/plain"))
+@@ -102,6 +103,7 @@ (server/dispatch-on :get
+                     (fn [{:keys [path]} _ _] (or (= path "/")
+                                                 (.endsWith path ".js")
+                                                 (.endsWith path ".cljs")
++                                                (.endsWith path ".cljc")
+                                                 (.endsWith path ".map")
+                                                 (.endsWith path ".html")))
+                     send-static)
+diff --git a/src/clj/cljs/util.clj b/src/clj/cljs/util.clj
+index 0e50efb..3ba7647 100644
+--- a/src/clj/cljs/util.clj
++++ b/src/clj/cljs/util.clj
+@@ -12,7 +12,7 @@ (ns cljs.util
+   (:import [java.io File]))
+ 
+ ;; next line is auto-generated by the build-script - Do not edit!
+-(def ^:dynamic *clojurescript-version*)
++(def ^:dynamic *clojurescript-version* {:major 0, :minor 0, :qualifier 2380})
+ 
+ (defn clojurescript-version 
+   "Returns clojurescript version as a printable string."
+@@ -38,7 +38,14 @@ (defn munge-path [ss]
+   (clojure.lang.Compiler/munge (str ss)))
+ 
+ (defn ns->relpath [s]
+-  (str (string/replace (munge-path s) \. \/) ".cljs"))
++  (let [path (string/replace (munge-path s) \. \/)
++        cljs-path (str path ".cljs")
++        cljc-path (str path ".cljc")]
++    (if (io/resource cljs-path)
++      cljs-path
++      (if (io/resource cljc-path)
++        cljc-path
++        cljs-path))))
+ 
+ (defn path-seq
+   [file-str]
+-- 
+1.8.3.2
+
